@@ -1,0 +1,9 @@
+ebin
+.DS_Store
+*.beam
+**/*beam
+
+## emacs stuff
+**/#*
+**/.#*
+**/*~
