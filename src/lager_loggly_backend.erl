@@ -68,6 +68,27 @@ handle_call(_Request, State) ->
     {ok, ok, State}.
 
 %% @private
+handle_event({log, LagerMsg}, State) ->
+    case lager_msg:severity_as_int(LagerMsg) =< State#state.level of
+        true ->
+            Payload = jsx:to_json(
+                        [
+                         {<<"identity">>, any_to_binary(State#state.identity)}
+                         ,{<<"level">>,
+                           atom_to_binary(lager_msg:severity(LagerMsg), utf8)}
+                         ,{<<"message">>,
+                           any_to_binary(lager_msg:message(LagerMsg))}
+                        ]),
+            Request = {State#state.loggly_url, [], "application/json", Payload},
+            RetryTimes = State#state.retry_times,
+            RetryInterval = State#state.retry_interval,
+            %% Spawn a background process to handle sending the payload.
+            %% It will recurse until the payload has ben successfully sent.
+            spawn(fun()-> deferred_log(Request, RetryTimes, RetryInterval) end),
+            {ok, State};
+       false ->
+            {ok, State}
+    end;
 handle_event({log, Level, {_Date, _Time}, [_LvlStr, Loc, Message]}, State)
         when Level =< State#state.level ->
     Payload = jsx:to_json([
