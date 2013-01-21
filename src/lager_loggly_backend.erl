@@ -71,44 +71,33 @@ handle_call(_Request, State) ->
 handle_event({log, LagerMsg}, State) ->
     case lager_msg:severity_as_int(LagerMsg) =< State#state.level of
         true ->
-            Payload = jsx:to_json(
-                        [
-                         {<<"identity">>, any_to_binary(State#state.identity)}
-                         ,{<<"level">>,
-                           atom_to_binary(lager_msg:severity(LagerMsg), utf8)}
+            MDs = fix_pid(lager_msg:metadata(LagerMsg)),
+            Payload = jiffy:encode(
+                        {[
+                         {<<"identity">>, State#state.identity}
+                         ,{<<"level">>, lager_msg:severity(LagerMsg)}
                          ,{<<"message">>,
-                           any_to_binary(lager_msg:message(LagerMsg))}
-                        ]),
+                           list_to_binary(lager_msg:message(LagerMsg))}
+                         ] ++ MDs}),
             Request = {State#state.loggly_url, [], "application/json", Payload},
             RetryTimes = State#state.retry_times,
             RetryInterval = State#state.retry_interval,
             %% Spawn a background process to handle sending the payload.
             %% It will recurse until the payload has ben successfully sent.
-            spawn(fun()-> deferred_log(Request, RetryTimes, RetryInterval) end),
+            spawn_monitor(
+              fun()-> deferred_log(Request, RetryTimes, RetryInterval) end),
             {ok, State};
        false ->
             {ok, State}
     end;
-handle_event({log, Level, {_Date, _Time}, [_LvlStr, Loc, Message]}, State)
-        when Level =< State#state.level ->
-    Payload = jsx:to_json([
-                            {<<"identity">>, any_to_binary(State#state.identity)}
-                            ,{<<"level">>, convert_level(Level)}
-                            ,{<<"location">>, any_to_binary(Loc)}
-                            ,{<<"message">>, any_to_binary(Message)}
-                          ]),
-    Request = {State#state.loggly_url, [], "application/json", Payload},
-    RetryTimes = State#state.retry_times,
-    RetryInterval = State#state.retry_interval,
-
-    %% Spawn a background process to handle sending the payload.
-    %% It will recurse until the payload has ben successfully sent.
-    spawn(?MODULE, deferred_log, [Request, RetryTimes, RetryInterval]),
-    {ok, State};
-handle_event(_Event, State) ->
+handle_event(Event, State) ->
+    error_logger:info_msg("~p got event ~p", [?MODULE, Event]),
     {ok, State}.
 
-handle_info(_Info, State) ->
+handle_info({'DOWN', _Ref, process, _Pid, normal}, State) ->
+    {ok, State};
+handle_info(Info, State) ->
+    error_logger:info_msg("~p got info ~p", [?MODULE, Info]),
     {ok, State}.
 
 terminate(_Reason, _State) ->
@@ -120,6 +109,11 @@ code_change(_OldVsn, State, _Extra) ->
 
 %%% Private
 
+fix_pid(L) ->
+    case lists:keyfind(pid, 1, L) of
+        {pid, PidStr} -> lists:keyreplace(pid, 1, L, {pid, list_to_binary(PidStr)});
+        false -> L
+    end.
 
 deferred_log(_Request, 0, _) ->
     ok;
@@ -130,10 +124,3 @@ deferred_log(Request, Retries, Interval) ->
             timer:sleep(Interval * 1000),
             deferred_log(Request, Retries - 1, Interval)
     end.
-
-convert_level(Level) ->
-    any_to_binary(lager_util:num_to_level(Level)).
-
-any_to_binary(V) when is_atom(V)   -> any_to_binary(atom_to_list(V));
-any_to_binary(V) when is_list(V)   -> list_to_binary(V);
-any_to_binary(V) when is_binary(V) -> V.
