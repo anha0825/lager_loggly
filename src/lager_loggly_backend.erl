@@ -111,9 +111,12 @@ code_change(_OldVsn, State, _Extra) ->
 
 fix_pid(L) ->
     case lists:keyfind(pid, 1, L) of
-        {pid, PidStr} -> lists:keyreplace(pid, 1, L, {pid, list_to_binary(PidStr)});
+        {pid, PidStr} -> lists:keyreplace(pid, 1, L, {pid, to_binary(PidStr)});
         false -> L
     end.
+
+to_binary(Str) when is_list(Str) -> list_to_binary(Str);
+to_binary(Pid) when is_pid(Pid) -> list_to_binary(pid_to_list(Pid)).
 
 deferred_log(_Request, 0, _) ->
     ok;
