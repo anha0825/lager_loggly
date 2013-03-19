@@ -38,23 +38,23 @@
         ]).
 
 %%% this is only exported for the spawn call
--export([deferred_log/3]).
+-export([deferred_log/4]).
 
 -record(state, {
                 identity        :: string()
                 ,level          :: integer()
-                ,retry_interval :: integer()
+                ,timeout        :: integer()
                 ,retry_times    :: integer()
                 ,loggly_url     :: string()
                }).
 
 -include_lib("lager/include/lager.hrl").
 
-init([Identity, Level, RetryTimes, RetryInterval, LogglyUrl]) ->
+init([Identity, Level, RetryTimes, Timeout, LogglyUrl]) ->
     State = #state{
                    identity        = Identity
                    ,level          = lager_util:level_to_num(Level)
-                   ,retry_interval = RetryInterval
+                   ,timeout        = Timeout
                    ,retry_times    = RetryTimes
                    ,loggly_url     = LogglyUrl
                   },
@@ -79,13 +79,12 @@ handle_event({log, LagerMsg}, State) ->
                          ,{<<"message">>,
                            list_to_binary(lager_msg:message(LagerMsg))}
                          ] ++ MDs}),
-            Request = {State#state.loggly_url, [], "application/json", Payload},
             RetryTimes = State#state.retry_times,
-            RetryInterval = State#state.retry_interval,
+            Timeout = State#state.timeout,
             %% Spawn a background process to handle sending the payload.
             %% It will recurse until the payload has ben successfully sent.
-            spawn_monitor(
-              fun()-> deferred_log(Request, RetryTimes, RetryInterval) end),
+            spawn(fun()-> deferred_log(State#state.loggly_url, Payload,
+                                       RetryTimes, Timeout) end),
             {ok, State};
        false ->
             {ok, State}
@@ -118,12 +117,6 @@ fix_pid(L) ->
 to_binary(Str) when is_list(Str) -> list_to_binary(Str);
 to_binary(Pid) when is_pid(Pid) -> list_to_binary(pid_to_list(Pid)).
 
-deferred_log(_Request, 0, _) ->
-    ok;
-deferred_log(Request, Retries, Interval) ->
-    case httpc:request(post, Request, [], [{body_format, binary}]) of
-        {ok, {{_, 200, _}, _H, _B}} -> ok;
-        _ ->
-            timer:sleep(Interval * 1000),
-            deferred_log(Request, Retries - 1, Interval)
-    end.
+deferred_log(Url, Body, Retries, Timeout) ->
+    lhttpc:request(Url, post, [], Body, Timeout * 1000,
+                   [{send_retry, Retries}]).
