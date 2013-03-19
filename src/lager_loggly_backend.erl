@@ -71,11 +71,10 @@ handle_call(_Request, State) ->
 handle_event({log, LagerMsg}, State) ->
     case lager_msg:severity_as_int(LagerMsg) =< State#state.level of
         true ->
-            MDs = fix_pid(lager_msg:metadata(LagerMsg)),
+            MDs = fix_mfa(fix_pid(lager_msg:metadata(LagerMsg))),
             Payload = jiffy:encode(
                         {[
-                         {<<"identity">>, State#state.identity}
-                         ,{<<"level">>, lager_msg:severity(LagerMsg)}
+                          {<<"level">>, lager_msg:severity(LagerMsg)}
                          ,{<<"message">>,
                            list_to_binary(lager_msg:message(LagerMsg))}
                          ] ++ MDs}),
@@ -107,6 +106,18 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 %%% Private
+
+fix_mfa(L) ->
+    try
+        {value, {module, Mod}, L1} = lists:keytake(module, 1, L),
+        {value, {function, Fun}, L2} = lists:keytake(function, 1, L1),
+        {value, {line, Line}, L3} = lists:keytake(line, 1, L2),
+        Mfl = list_to_binary(io_lib:format("~s:~s ~w", [Mod, Fun, Line])),
+        [{<<"mfl">>, Mfl}|L3]
+    catch
+        _:_ ->
+            L
+    end.
 
 fix_pid(L) ->
     case lists:keyfind(pid, 1, L) of
